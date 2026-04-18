@@ -29,7 +29,10 @@ Built for the workflow: *work with Claude Code interactively, then hand off a sc
 
 ## Installation
 
-1. Save the script as `~/claude-sprint.sh`.
+1. Download the script to your home directory:
+   ```bash
+   wget https://raw.githubusercontent.com/Earney-IT/claude-sprint-agent/refs/heads/main/claude-sprint.sh -O ~/claude-sprint.sh
+   ```
 2. Make it executable:
    ```bash
    chmod +x ~/claude-sprint.sh
