@@ -280,7 +280,7 @@ To run multiple sprints on different projects in parallel, make copies of the sc
 ## Safety notes
 
 - **`git*` is fully open.** Claude can force-push, rewrite history, delete branches. The assumption is that GitHub history + branch protection rules on important branches are your recovery safety net.
-- **Docker is fully open.** Claude can stop containers, remove images, prune volumes. If your host runs containers outside this project, be aware a `docker system prune -af` would hit them too.
+- **Docker is fully open in the allowlist.** Technically Claude can stop containers, remove images, and prune volumes anywhere on the host. The sprint prompt mitigates this with explicit instructions to scope every Docker operation to this project's compose stack and to never run host-wide commands like `docker system prune`, `docker volume prune`, `docker image prune -a`, or `docker rm $(docker ps -aq)`. That's a soft guardrail (instructions, not a hard block) — if you've got high-value containers from other projects on the same host, treat this as a meaningful risk and consider running the sprint on a host that only serves this project.
 - **Network is open.** `curl` and `wget` can hit any URL. Not a realistic risk for dev work, but worth knowing.
 - **No runtime supervision.** Unlike the remote-control version of this workflow, you cannot interrupt, redirect, or course-correct the sprint mid-run without SSH'ing in and killing the process. Make the prompt count.
 
