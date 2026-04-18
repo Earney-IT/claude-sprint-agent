@@ -77,11 +77,13 @@ Claude sometimes emits `DONE` prematurely — for example, finishing the "curren
 
 Behavior:
 - Pass 1 runs. If Claude says `DONE`, pass 2 runs (resuming the same session). If pass 2 says `DONE`, pass 3 runs. And so on up to `N`.
-- If any pass hits `INCOMPLETE` (no `DONE`, typically from `--max-turns`), the multi-pass run stops there.
+- If a pass hits `INCOMPLETE` (no `DONE`, typically because `--max-turns` ran out), the next pass still runs — it resumes the session with a fresh turn budget. This is how you chain short passes into a long sprint.
 - If any pass errors, the multi-pass run stops immediately with status `ERROR`.
+- If `--usage N%` is set and cumulative cost crosses the threshold, the run stops with status `USAGE_LIMIT`.
 - When pass 1 starts fresh (no session ID), the script captures the new session ID from pass 1's stream-json output and uses it to resume for passes 2+.
+- Final status reflects the **last** pass's outcome (DONE / INCOMPLETE), unless a hard stop (ERROR / USAGE_LIMIT) happened.
 
-Good for: finishing a multi-phase plan where the "done" marker only reflects the most recent batch, not the whole backlog. Bad for: single-task sprints where you know a `DONE` means truly done — stick with `--passes 1` (the default) to avoid extra cost.
+Good for: finishing a multi-phase plan where the "done" marker only reflects the most recent batch, not the whole backlog. Also works well combined with a small `--max-turns` and a big `--passes` to slice one long sprint into many short passes.
 
 ### Option D — Budget-capped sprint (`--usage N%`)
 
@@ -112,7 +114,7 @@ Good for: "burn my plan on this backlog and stop at 100%" / "max out at 50% so I
 ```
 
 - `--effort` accepts `low` / `medium` / `high` / `max`. Defaults to `max`. Lower = faster and cheaper per turn at the cost of reasoning quality.
-- `--max-turns N` is the per-pass turn budget (default `300`). When a pass hits it without emitting `DONE`, the run ends as `INCOMPLETE`. Pair with a big `--passes N` to turn one long pass into several shorter ones that each get a fresh turn counter.
+- `--max-turns N` is the per-pass turn budget (default `300`). When a pass hits it without emitting `DONE`, that pass finishes as `INCOMPLETE` but the multi-pass loop keeps going — the next pass resumes the session with a fresh turn budget. Pair with a big `--passes N` to slice one long sprint into several shorter checkpoints.
 
 ### Watching it live (optional)
 
@@ -152,7 +154,7 @@ When `screen -ls` shows no matching session, the sprint has ended — check the 
 `~/claude-sprint.status` is written when the sprint ends. It contains one of:
 
 - **`DONE`** — The last pass Claude ran emitted `DONE`. In multi-pass mode, this also means every earlier pass emitted `DONE` (otherwise the run would have stopped earlier as `INCOMPLETE`). Clean success.
-- **`INCOMPLETE`** — A pass exited without emitting `DONE` (usually because it hit `--max-turns`). Check the log to see where it stopped.
+- **`INCOMPLETE`** — The **last** pass exited without emitting `DONE` (usually because it hit `--max-turns`). In multi-pass runs, earlier passes may have also been INCOMPLETE; the loop keeps going through `--passes N` regardless, and INCOMPLETE just reflects where it left off. Check the log to see where it stopped.
 - **`USAGE_LIMIT`** — The cumulative cost across passes reached the `--usage N%` threshold and the multi-pass run stopped on purpose. Not a failure — just the budget working as configured.
 - **`ERROR`** — A pass exited non-zero. Something went wrong. Log will have details.
 

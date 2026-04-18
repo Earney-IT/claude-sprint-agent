@@ -50,8 +50,10 @@ Usage: $(basename "$0") [session-id] [flags]
   session-id       Claude Code session ID to resume (optional).
                    If omitted, starts fresh and captures the new ID for later passes.
 
-  --passes N       Run the sprint up to N times. After each DONE, re-run up to
-                   N-1 more times. Stops early on INCOMPLETE or ERROR. Default: 1.
+  --passes N       Run the sprint up to N times. Each pass resumes the same
+                   session. Stops early only on ERROR or --usage cap; INCOMPLETE
+                   (pass ran out of --max-turns without DONE) continues to the
+                   next pass with a fresh turn budget. Default: 1.
   --usage N%       Stop multi-pass once cumulative cost reaches N% of PLAN_CAP_USD.
                    Accepts "50%" or "50". Checked between passes, so may overshoot
                    by up to one pass's cost.
@@ -283,12 +285,13 @@ for (( pass=1; pass<=PASSES; pass++ )); do
     fi
   fi
 
-  # No DONE marker → treat as INCOMPLETE and stop (don't burn more passes on a
-  # stuck session). Only reached if we didn't already break on USAGE_LIMIT.
+  # No DONE marker → record INCOMPLETE for this pass but keep going. This lets
+  # you chain short --max-turns passes: each one runs out of its turn budget,
+  # the next one resumes with a fresh budget. Only ERROR and USAGE_LIMIT break
+  # the multi-pass loop.
   if [[ "$PASS_DONE" != "1" ]]; then
-    echo "[$(date)] Pass $pass: no DONE marker (INCOMPLETE) — stopping multi-pass run." | tee -a "$LOG_FILE"
+    echo "[$(date)] Pass $pass: no DONE marker (INCOMPLETE) — continuing to next pass." | tee -a "$LOG_FILE"
     OVERALL_STATUS="INCOMPLETE"
-    break
   fi
 done
 
