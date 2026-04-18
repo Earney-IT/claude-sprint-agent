@@ -66,6 +66,23 @@ Pick the session you want and copy its ID. Then:
 
 Claude picks up with full conversation history from that session.
 
+### Option C — Multi-pass sprint (`--passes N`)
+
+Claude sometimes emits `DONE` prematurely — for example, finishing the "current batch" of tasks but leaving later phases untouched. `--passes N` re-runs the sprint after each `DONE`, up to `N` total passes, giving Claude another shot at picking up the remaining work:
+
+```bash
+~/claude-sprint.sh --passes 3                      # fresh sprint, up to 3 passes
+~/claude-sprint.sh <session-id> --passes 3         # resume, up to 3 passes
+```
+
+Behavior:
+- Pass 1 runs. If Claude says `DONE`, pass 2 runs (resuming the same session). If pass 2 says `DONE`, pass 3 runs. And so on up to `N`.
+- If any pass hits `INCOMPLETE` (no `DONE`, typically from `--max-turns`), the multi-pass run stops there.
+- If any pass errors, the multi-pass run stops immediately with status `ERROR`.
+- When pass 1 starts fresh (no session ID), the script captures the new session ID from pass 1's stream-json output and uses it to resume for passes 2+.
+
+Good for: finishing a multi-phase plan where the "done" marker only reflects the most recent batch, not the whole backlog. Bad for: single-task sprints where you know a `DONE` means truly done — stick with `--passes 1` (the default) to avoid extra cost.
+
 ### Watching it live (optional)
 
 The sprint runs detached in the background — you don't have to attach. But if you want to peek at it live:
