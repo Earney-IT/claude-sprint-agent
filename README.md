@@ -248,7 +248,7 @@ Note that bare `docker` subcommands (anything that isn't `docker compose ...`) a
 
 The prompt the script sends to Claude:
 
-> Continue working through the remaining tasks in order. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use `docker compose` targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like `docker system prune`, `docker volume prune`, `docker image prune -a`, `docker rm $(docker ps -aq)`, or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When all tasks are done, respond with exactly `DONE` and stop.
+> Continue working through the remaining tasks in order. Use subagents aggressively via the Task/Agent tool — dispatch specialized agents (general-purpose, code-reviewer, codebase explorers, etc., including any project-specific agents defined in `.claude/agents/`) for independent work streams to parallelize progress, for focused codebase exploration, and for reviewing non-trivial changes before committing. When multiple pieces of work can happen concurrently with no shared state or sequential dependency, spawn the subagents in a single turn rather than doing it all sequentially on the main thread. Keep using subagents throughout the sprint, not just at the start. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use `docker compose` targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like `docker system prune`, `docker volume prune`, `docker image prune -a`, `docker rm $(docker ps -aq)`, or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When all tasks are done, respond with exactly `DONE` and stop.
 
 If you want to change behavior, edit the prompt string in the script. Common tweaks:
 
@@ -256,6 +256,27 @@ If you want to change behavior, edit the prompt string in the script. Common twe
 - Narrow the scope: `"Only complete tasks under the 'Backend' heading..."`
 - Change the commit cadence: `"Commit after every file change..."`
 - Remove the deploy step: strip the "rebuild/redeploy" clause if you don't want live deploys during the sprint.
+
+---
+
+## Subagents (agent teams)
+
+Claude Code subagents are **enabled by default in headless mode** — there's no feature flag to set. The main agent can dispatch specialized sub-agents (general-purpose research, code-reviewer, codebase-explorer, etc.) to parallelize work and offload focused tasks. The sprint prompt explicitly instructs Claude to use them aggressively throughout the run.
+
+**Where subagent definitions live** (first match wins):
+1. `.claude/agents/` in the project dir — project-specific agents
+2. `~/.claude/agents/` — your personal agents, available across projects
+3. Plugin agents from installed Claude Code plugins
+
+Drop markdown files defining agents (with frontmatter for `description`, `tools`, optional `model`) in either directory and the main sprint agent will see them and use them. No script change required. To see what agents are available, open Claude Code interactively and type `/agents`.
+
+**Subagent model (optional):**
+Set `CLAUDE_CODE_SUBAGENT_MODEL` in your environment if you want subagents on a different model than the main sprint (e.g. Sonnet for cheaper parallelism while Opus drives the main thread):
+
+```bash
+export CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-4-6
+~/claude-sprint.sh <session-id> --passes 10 --usage 100%
+```
 
 ---
 
