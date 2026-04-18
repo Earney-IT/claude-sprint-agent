@@ -46,7 +46,7 @@ claude -p $RESUME_FLAG \
     "Bash(ps*)" "Bash(top*)" "Bash(htop*)" "Bash(kill*)" "Bash(pkill*)" "Bash(lsof*)" "Bash(netstat*)" "Bash(ss*)" \
     "Bash(systemctl status*)" "Bash(journalctl*)" "Bash(service * status)" \
     "Bash(psql*)" "Bash(mysql*)" "Bash(redis-cli*)" "Bash(sqlite3*)" "Bash(mongosh*)" \
-  "Continue working through the remaining tasks in order. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When all tasks are done, respond with exactly 'DONE' and stop." \
+  "Continue working through the remaining tasks in order. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When all tasks are done, respond with exactly 'DONE' and stop." \
   2>&1 | tee -a "$LOG_FILE"
 
 CLAUDE_EXIT=${PIPESTATUS[0]}
