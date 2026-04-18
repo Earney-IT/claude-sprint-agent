@@ -50,6 +50,7 @@ claude -p "$SPRINT_PROMPT" \
   --effort max \
   --max-turns 300 \
   --output-format stream-json \
+  --verbose \
   --include-partial-messages \
   --allowedTools \
     "Bash(git*)" "Bash(gh*)" \
