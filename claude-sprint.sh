@@ -8,6 +8,7 @@ PASSES=1
 USAGE_PERCENT=""
 EFFORT="max"
 MAX_TURNS=300
+PROJECT_DIR_FLAG=""
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,6 +44,14 @@ while [[ $# -gt 0 ]]; do
       MAX_TURNS="${1#--max-turns=}"
       shift
       ;;
+    --project-dir)
+      PROJECT_DIR_FLAG="$2"
+      shift 2
+      ;;
+    --project-dir=*)
+      PROJECT_DIR_FLAG="${1#--project-dir=}"
+      shift
+      ;;
     -h|--help)
       cat <<EOF
 Usage: $(basename "$0") [session-id] [flags]
@@ -62,6 +71,9 @@ Usage: $(basename "$0") [session-id] [flags]
                    Lower effort = faster / cheaper per turn, weaker reasoning.
   --max-turns N    Passed through to claude --max-turns. Default: 300.
                    Per-pass cap on agentic turns before the pass ends as INCOMPLETE.
+  --project-dir P  Directory to cd into before running Claude. Default: the
+                   current working directory. Override via CLAUDE_SPRINT_PROJECT_DIR
+                   env var if you want a persistent default.
 
 Examples:
   $(basename "$0")                                       # fresh, 1 pass, max effort
@@ -97,7 +109,17 @@ if [[ -z "$EFFORT" ]]; then
 fi
 
 # --- Config ---
-PROJECT_DIR="$HOME/eit-infosource"
+# PROJECT_DIR resolution order (first match wins):
+#   1. --project-dir flag
+#   2. CLAUDE_SPRINT_PROJECT_DIR env var
+#   3. Current working directory when the script was invoked
+if [[ -n "$PROJECT_DIR_FLAG" ]]; then
+  PROJECT_DIR="$PROJECT_DIR_FLAG"
+elif [[ -n "${CLAUDE_SPRINT_PROJECT_DIR:-}" ]]; then
+  PROJECT_DIR="$CLAUDE_SPRINT_PROJECT_DIR"
+else
+  PROJECT_DIR="$(pwd)"
+fi
 SCREEN_NAME="claude-sprint"
 # PLAN_CAP_USD: dollar proxy for 100% of your Claude Max plan's usage limit.
 # Since Claude Code doesn't expose "percent of plan" directly, --usage N% is
@@ -138,15 +160,28 @@ if [[ -z "${STY:-}" ]]; then
   exec screen -dmS "$SCREEN_NAME" "$0" "$@"
 fi
 
-cd "$PROJECT_DIR" || { echo "Cannot cd to $PROJECT_DIR"; exit 1; }
-
-# Create this run's log/status files and point the "latest" symlinks at them
+# Create this run's log/status files and point the "latest" symlinks at them.
+# Done BEFORE the cd so that an unresolvable PROJECT_DIR still leaves a visible
+# error trail in the log (the cd error would otherwise vanish into screen's
+# buffer).
 : > "$LOG_FILE"
 : > "$STATUS_FILE"
 ln -sf "$LOG_FILE" "$LATEST_LOG_LINK"
 ln -sf "$STATUS_FILE" "$LATEST_STATUS_LINK"
 
-echo "[$(date)] Starting Claude sprint in $PROJECT_DIR" | tee -a "$LOG_FILE"
+if ! cd "$PROJECT_DIR" 2>/dev/null; then
+  echo "[$(date)] ERROR: cannot cd to PROJECT_DIR=$PROJECT_DIR" | tee -a "$LOG_FILE"
+  echo "[$(date)] Hint: pass --project-dir PATH or set CLAUDE_SPRINT_PROJECT_DIR" | tee -a "$LOG_FILE"
+  echo "ERROR" > "$STATUS_FILE"
+  if [[ -n "${STY:-}" ]]; then
+    sleep 2
+    screen -X -S "$SCREEN_NAME" quit
+  fi
+  exit 1
+fi
+
+echo "[$(date)] Starting Claude sprint" | tee -a "$LOG_FILE"
+echo "[$(date)] Project:    $PROJECT_DIR" | tee -a "$LOG_FILE"
 echo "[$(date)] Log file:   $LOG_FILE" | tee -a "$LOG_FILE"
 echo "[$(date)] Status:     $STATUS_FILE" | tee -a "$LOG_FILE"
 echo "[$(date)] Passes:     up to $PASSES" | tee -a "$LOG_FILE"
@@ -169,7 +204,7 @@ echo "[$(date)] CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 (agent teams enabled)" | 
 # Using `read -d ''` (not $(cat <<EOF)) because bash -n misparses literal
 # $(...) inside a heredoc nested in command substitution.
 IFS= read -r -d '' SPRINT_PROMPT <<'PROMPT_EOF' || true
-Continue working through the remaining tasks in order. Agent teams are pre-enabled for you (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) — create a team of 3-5 specialized teammates (each one a full Claude Code instance with its own context window) whenever the remaining backlog has independent work streams that can genuinely run in parallel without stepping on each other: e.g. a backend implementer, a frontend implementer, a test writer, and a code reviewer. Assign each teammate a focused piece of work, let them coordinate via the shared task list and inter-agent messaging, and synthesize their output back before committing. Keep the team alive and keep assigning new work to it throughout the sprint — do not tear it down after a single round. After session resumption (the --resume flag), re-spawn the team if teammates have been lost, because in-process teammates do not currently persist across /resume in this experimental feature. For lighter-weight parallelization — focused codebase exploration, research questions, reviewing a specific change — use subagents via the Task/Agent tool (including any project-specific agents defined in .claude/agents/) rather than spinning up a full team. When multiple pieces of work can happen concurrently with no shared state or sequential dependency, spawn the agents in a single turn rather than doing it all sequentially on the main thread. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use 'docker compose' targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like 'docker system prune', 'docker volume prune', 'docker image prune -a', 'docker rm $(docker ps -aq)', or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When all tasks are done, respond with exactly 'DONE' and stop.
+Continue working through the remaining tasks in order. Agent teams are pre-enabled for you (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) — create a team of 3-5 specialized teammates (each one a full Claude Code instance with its own context window) whenever the remaining backlog has independent work streams that can genuinely run in parallel without stepping on each other: e.g. a backend implementer, a frontend implementer, a test writer, and a code reviewer. Assign each teammate a focused piece of work, let them coordinate via the shared task list and inter-agent messaging, and synthesize their output back before committing. Keep the team alive and keep assigning new work to it throughout the sprint — do not tear it down after a single round. After session resumption (the --resume flag), re-spawn the team if teammates have been lost, because in-process teammates do not currently persist across /resume in this experimental feature. For lighter-weight parallelization — focused codebase exploration, research questions, reviewing a specific change — use subagents via the Task/Agent tool (including any project-specific agents defined in .claude/agents/) rather than spinning up a full team. When multiple pieces of work can happen concurrently with no shared state or sequential dependency, spawn the agents in a single turn rather than doing it all sequentially on the main thread. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use 'docker compose' targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like 'docker system prune', 'docker volume prune', 'docker image prune -a', 'docker rm $(docker ps -aq)', or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When the current batch of work is complete but there may still be more to do in follow-up passes, respond with exactly 'DONE' and stop. When you have genuinely searched for remaining work (re-read the plan / task file, checked git status, looked at any TODO/BACKLOG docs) and there is truly nothing left to do, respond with exactly 'NO TASKS' and stop — the wrapper uses this as a hard signal to end the multi-pass run and not waste further credits on empty iterations. Do not say 'NO TASKS' just because the current batch is finished; only use it when the backlog itself is empty.
 PROMPT_EOF
 
 # --- Multi-pass loop ---
@@ -254,15 +289,25 @@ for (( pass=1; pass<=PASSES; pass++ )); do
     break
   fi
 
-  # Detect DONE within this pass's output only
+  # Detect terminal markers within this pass's output only.
+  # NO TASKS is a hard stop. To avoid false positives from subagents or
+  # teammates saying "NO TASKS" in their own reports, we ONLY check the main
+  # agent's final result event (the top-level "type":"result" line — there is
+  # exactly one per headless -p invocation, and it carries the main agent's
+  # final response). Subagent/teammate outputs live inside assistant messages
+  # and never produce their own result events at this level.
   PASS_OUTPUT=$(tail -n +$((PASS_START + 1)) "$LOG_FILE")
-  if echo "$PASS_OUTPUT" | grep -q '"result":"DONE"' || \
-     echo "$PASS_OUTPUT" | grep -qE '(^|[^A-Z])DONE([^A-Z]|$)'; then
+  MAIN_RESULT=$(echo "$PASS_OUTPUT" | grep '"type":"result"' | tail -1)
+  PASS_NO_TASKS=0
+  PASS_DONE=0
+  if echo "$MAIN_RESULT" | grep -q '"result":"NO TASKS"'; then
+    echo "[$(date)] Pass $pass: NO TASKS detected from main agent — backlog is empty." | tee -a "$LOG_FILE"
+    PASS_NO_TASKS=1
+  elif echo "$MAIN_RESULT" | grep -q '"result":"DONE"' || \
+       echo "$PASS_OUTPUT" | grep -qE '(^|[^A-Z])DONE([^A-Z]|$)'; then
     echo "[$(date)] Pass $pass: DONE detected." | tee -a "$LOG_FILE"
     OVERALL_STATUS="DONE"
     PASS_DONE=1
-  else
-    PASS_DONE=0
   fi
 
   # Extract this pass's cost from its result event and update cumulative total
@@ -272,6 +317,13 @@ for (( pass=1; pass<=PASSES; pass++ )); do
     echo "[$(date)] Pass $pass cost: \$${PASS_COST}  |  cumulative: \$${CUMULATIVE_COST_USD}" | tee -a "$LOG_FILE"
   else
     echo "[$(date)] Pass $pass: could not extract cost from result event" | tee -a "$LOG_FILE"
+  fi
+
+  # NO TASKS from the main agent = hard stop. Nothing left to do, don't waste
+  # more passes on empty iterations.
+  if [[ "$PASS_NO_TASKS" == "1" ]]; then
+    OVERALL_STATUS="NO_TASKS"
+    break
   fi
 
   # Post-pass usage-cap check — trumps DONE/continue logic so we always exit
@@ -287,8 +339,8 @@ for (( pass=1; pass<=PASSES; pass++ )); do
 
   # No DONE marker → record INCOMPLETE for this pass but keep going. This lets
   # you chain short --max-turns passes: each one runs out of its turn budget,
-  # the next one resumes with a fresh budget. Only ERROR and USAGE_LIMIT break
-  # the multi-pass loop.
+  # the next one resumes with a fresh budget. Only ERROR, USAGE_LIMIT, and
+  # NO_TASKS break the multi-pass loop.
   if [[ "$PASS_DONE" != "1" ]]; then
     echo "[$(date)] Pass $pass: no DONE marker (INCOMPLETE) — continuing to next pass." | tee -a "$LOG_FILE"
     OVERALL_STATUS="INCOMPLETE"
