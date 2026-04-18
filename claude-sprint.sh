@@ -9,6 +9,7 @@ USAGE_PERCENT=""
 EFFORT="max"
 MAX_TURNS=300
 PROJECT_DIR_FLAG=""
+USE_TEAM=0
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,6 +53,14 @@ while [[ $# -gt 0 ]]; do
       PROJECT_DIR_FLAG="${1#--project-dir=}"
       shift
       ;;
+    --team)
+      USE_TEAM=1
+      shift
+      ;;
+    --no-team)
+      USE_TEAM=0
+      shift
+      ;;
     -h|--help)
       cat <<EOF
 Usage: $(basename "$0") [session-id] [flags]
@@ -74,6 +83,13 @@ Usage: $(basename "$0") [session-id] [flags]
   --project-dir P  Directory to cd into before running Claude. Default: the
                    current working directory. Override via CLAUDE_SPRINT_PROJECT_DIR
                    env var if you want a persistent default.
+  --team           Enable agent teams (experimental). Sets
+                   CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 and instructs Claude
+                   in the prompt to spin up a 3-5 member team for parallel work.
+                   Off by default — teams use significantly more tokens than a
+                   solo session.
+  --no-team        Explicitly disable agent teams (the default). Useful for
+                   overriding a future change of default.
 
 Examples:
   $(basename "$0")                                       # fresh, 1 pass, max effort
@@ -201,21 +217,31 @@ if [[ -n "$USAGE_CAP_USD" ]]; then
   echo "[$(date)] Usage cap:  ${USAGE_PERCENT%\%}% of \$${PLAN_CAP_USD} = \$${USAGE_CAP_USD}" | tee -a "$LOG_FILE"
 fi
 
-# Enable agent teams (experimental, disabled by default in Claude Code).
-# Requires Claude Code v2.1.32+. Without this, the main agent can still use
-# subagents via the Task tool, but cannot spin up a team of peer Claude Code
-# instances that coordinate via a shared task list.
-export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-echo "[$(date)] CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 (agent teams enabled)" | tee -a "$LOG_FILE"
+# Conditionally enable agent teams (experimental in Claude Code, requires
+# v2.1.32+). When enabled, also tell Claude in the prompt to use them.
+# Without --team, the main agent can still use subagents via the Task tool —
+# just no peer-Claude-Code teammates.
+if [[ "$USE_TEAM" == "1" ]]; then
+  export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+  echo "[$(date)] Agent teams: ENABLED (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1)" | tee -a "$LOG_FILE"
+else
+  echo "[$(date)] Agent teams: disabled (use --team to enable)" | tee -a "$LOG_FILE"
+fi
 
 # --- Sprint prompt ---
 # Captured into a variable so it can be passed as the value of -p, avoiding
 # argument-parsing collisions with the multi-value --allowedTools flag.
 # Using `read -d ''` (not $(cat <<EOF)) because bash -n misparses literal
 # $(...) inside a heredoc nested in command substitution.
-IFS= read -r -d '' SPRINT_PROMPT <<'PROMPT_EOF' || true
+if [[ "$USE_TEAM" == "1" ]]; then
+  IFS= read -r -d '' SPRINT_PROMPT <<'PROMPT_EOF' || true
 Continue working through the remaining tasks in order. Agent teams are pre-enabled for you (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1) — create a team of 3-5 specialized teammates (each one a full Claude Code instance with its own context window) whenever the remaining backlog has independent work streams that can genuinely run in parallel without stepping on each other: e.g. a backend implementer, a frontend implementer, a test writer, and a code reviewer. Assign each teammate a focused piece of work, let them coordinate via the shared task list and inter-agent messaging, and synthesize their output back before committing. Keep the team alive and keep assigning new work to it throughout the sprint — do not tear it down after a single round. After session resumption (the --resume flag), re-spawn the team if teammates have been lost, because in-process teammates do not currently persist across /resume in this experimental feature. For lighter-weight parallelization — focused codebase exploration, research questions, reviewing a specific change — use subagents via the Task/Agent tool (including any project-specific agents defined in .claude/agents/) rather than spinning up a full team. When multiple pieces of work can happen concurrently with no shared state or sequential dependency, spawn the agents in a single turn rather than doing it all sequentially on the main thread. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use 'docker compose' targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like 'docker system prune', 'docker volume prune', 'docker image prune -a', 'docker rm $(docker ps -aq)', or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When the current batch of work is complete but there may still be more to do in follow-up passes, respond with exactly 'DONE' and stop. When you have genuinely searched for remaining work (re-read the plan / task file, checked git status, looked at any TODO/BACKLOG docs) and there is truly nothing left to do, respond with exactly 'NO TASKS' and stop — the wrapper uses this as a hard signal to end the multi-pass run and not waste further credits on empty iterations. Do not say 'NO TASKS' just because the current batch is finished; only use it when the backlog itself is empty.
 PROMPT_EOF
+else
+  IFS= read -r -d '' SPRINT_PROMPT <<'PROMPT_EOF' || true
+Continue working through the remaining tasks in order. Use subagents via the Task/Agent tool (including any project-specific agents defined in .claude/agents/) aggressively — dispatch specialized agents for independent work streams to parallelize progress, for focused codebase exploration, and for reviewing non-trivial changes before committing. When multiple pieces of work can happen concurrently with no shared state or sequential dependency, spawn the subagents in a single turn rather than doing it all sequentially on the main thread. Keep using subagents throughout the sprint, not just at the start. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use 'docker compose' targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like 'docker system prune', 'docker volume prune', 'docker image prune -a', 'docker rm $(docker ps -aq)', or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When the current batch of work is complete but there may still be more to do in follow-up passes, respond with exactly 'DONE' and stop. When you have genuinely searched for remaining work (re-read the plan / task file, checked git status, looked at any TODO/BACKLOG docs) and there is truly nothing left to do, respond with exactly 'NO TASKS' and stop — the wrapper uses this as a hard signal to end the multi-pass run and not waste further credits on empty iterations. Do not say 'NO TASKS' just because the current batch is finished; only use it when the backlog itself is empty.
+PROMPT_EOF
+fi
 
 # --- Multi-pass loop ---
 OVERALL_STATUS="INCOMPLETE"

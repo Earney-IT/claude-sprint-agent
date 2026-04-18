@@ -117,6 +117,7 @@ Good for: "burn my plan on this backlog and stop at 100%" / "max out at 50% so I
 
 - `--effort` accepts `low` / `medium` / `high` / `max`. Defaults to `max`. Lower = faster and cheaper per turn at the cost of reasoning quality.
 - `--max-turns N` is the per-pass turn budget (default `300`). When a pass hits it without emitting `DONE`, that pass finishes as `INCOMPLETE` but the multi-pass loop keeps going — the next pass resumes the session with a fresh turn budget. Pair with a big `--passes N` to slice one long sprint into several shorter checkpoints.
+- `--team` (off by default) opts into experimental agent teams — see [Agent teams](#agent-teams-experimental--opt-in-via---team) below. Adds significant token cost; only worth it for backlogs with genuinely independent parallel work streams.
 
 ### Watching it live (optional)
 
@@ -270,9 +271,15 @@ Note that bare `docker` subcommands (anything that isn't `docker compose ...`) a
 
 ## The sprint prompt
 
-The prompt the script sends to Claude:
+The script sends one of two prompts depending on whether `--team` is set. Both share the same Docker-scoping, commit/push/deploy, and `DONE` / `NO TASKS` instructions; they differ only in how they tell Claude to parallelize work.
 
-> Continue working through the remaining tasks in order. Agent teams are pre-enabled for you (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) — create a team of 3-5 specialized teammates (each one a full Claude Code instance with its own context window) whenever the remaining backlog has independent work streams that can genuinely run in parallel without stepping on each other: e.g. a backend implementer, a frontend implementer, a test writer, and a code reviewer. Assign each teammate a focused piece of work, let them coordinate via the shared task list and inter-agent messaging, and synthesize their output back before committing. Keep the team alive and keep assigning new work to it throughout the sprint — do not tear it down after a single round. After session resumption (the `--resume` flag), re-spawn the team if teammates have been lost, because in-process teammates do not currently persist across `/resume` in this experimental feature. For lighter-weight parallelization — focused codebase exploration, research questions, reviewing a specific change — use subagents via the Task/Agent tool (including any project-specific agents defined in `.claude/agents/`) rather than spinning up a full team. When multiple pieces of work can happen concurrently with no shared state or sequential dependency, spawn the agents in a single turn rather than doing it all sequentially on the main thread. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use `docker compose` targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like `docker system prune`, `docker volume prune`, `docker image prune -a`, `docker rm $(docker ps -aq)`, or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When the current batch of work is complete but there may still be more to do in follow-up passes, respond with exactly `DONE` and stop. When you have genuinely searched for remaining work (re-read the plan / task file, checked git status, looked at any TODO/BACKLOG docs) and there is truly nothing left to do, respond with exactly `NO TASKS` and stop — the wrapper uses this as a hard signal to end the multi-pass run and not waste further credits on empty iterations. Do not say `NO TASKS` just because the current batch is finished; only use it when the backlog itself is empty.
+**Default prompt (no `--team`):**
+
+> Continue working through the remaining tasks in order. Use subagents via the Task/Agent tool (including any project-specific agents defined in `.claude/agents/`) aggressively — dispatch specialized agents for independent work streams to parallelize progress, for focused codebase exploration, and for reviewing non-trivial changes before committing. When multiple pieces of work can happen concurrently with no shared state or sequential dependency, spawn the subagents in a single turn rather than doing it all sequentially on the main thread. Keep using subagents throughout the sprint, not just at the start. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use `docker compose` targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like `docker system prune`, `docker volume prune`, `docker image prune -a`, `docker rm $(docker ps -aq)`, or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When the current batch of work is complete but there may still be more to do in follow-up passes, respond with exactly `DONE` and stop. When you have genuinely searched for remaining work (re-read the plan / task file, checked git status, looked at any TODO/BACKLOG docs) and there is truly nothing left to do, respond with exactly `NO TASKS` and stop — the wrapper uses this as a hard signal to end the multi-pass run and not waste further credits on empty iterations. Do not say `NO TASKS` just because the current batch is finished; only use it when the backlog itself is empty.
+
+**Team prompt (`--team`):**
+
+Same as above, but the "use subagents aggressively" paragraph is replaced with team-specific guidance: spin up 3-5 specialized teammates (backend, frontend, test writer, reviewer), assign each a focused piece, keep the team alive throughout the sprint, re-spawn teammates after `/resume` since they don't persist across session resumption. The Docker, commit, and `DONE` / `NO TASKS` sections are identical.
 
 If you want to change behavior, edit the prompt string in the script. Common tweaks:
 
@@ -287,17 +294,23 @@ If you want to change behavior, edit the prompt string in the script. Common twe
 
 The sprint script gives Claude two separate mechanisms for parallel work, and the prompt tells it when to use which.
 
-### Agent teams (experimental — enabled by the script)
+### Agent teams (experimental — opt-in via `--team`)
 
 [Agent teams](https://code.claude.com/docs/en/agent-teams) spin up multiple peer Claude Code instances that coordinate via a shared task list and can message each other directly. They're the right tool when the remaining backlog has independent work streams that benefit from genuine parallelism (backend + frontend + tests, or multi-perspective code review).
 
-Agent teams are **experimental and disabled by default in Claude Code**. The sprint script auto-enables them:
+Agent teams are **experimental and off by default**. Pass `--team` to opt in:
 
 ```bash
-export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+~/claude-sprint.sh <session-id> --passes 5 --team
 ```
 
-This is set before Claude launches, so the agent can create and manage teams without any extra config. Requires Claude Code v2.1.32+ (check with `claude --version`).
+When `--team` is set, the script:
+1. Exports `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` before launching `claude`.
+2. Uses a prompt variant that explicitly tells Claude to spin up a 3-5 member team and keep using it throughout the sprint.
+
+When `--team` is **not** set, the env var stays unset, the prompt drops the team-specific paragraph, and Claude falls back to using regular subagents (Task/Agent tool) only. This is the safer default because teams use significantly more tokens — a 5-teammate run is roughly 5 Claude instances burning context window in parallel.
+
+Requires Claude Code v2.1.32+ (check with `claude --version`).
 
 **Known headless caveats** (all documented in the official docs):
 - **Teammates do not survive `/resume`**: after a session resumes (which is exactly what multi-pass mode does), any in-process teammates from the prior pass are gone. The prompt instructs Claude to re-spawn the team when this happens.
