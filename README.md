@@ -10,10 +10,11 @@ Built for the workflow: *work with Claude Code interactively, then hand off a sc
 
 1. Runs `claude` in headless print mode (`-p`) with a scoped permission set tuned for dev work.
 2. Optionally resumes a prior Claude Code session so Claude keeps the full context of what you were working on.
-3. Streams all output to a timestamped log file (`~/claude-sprint-<YYYYMMDD-HHMMSS>-<session-tag>.log`) so every run is preserved, with `~/claude-sprint.log` as a symlink to the most recent run.
-4. Watches the log for `DONE` — the signal Claude emits when the task list is complete.
-5. Writes a timestamped status file alongside the log, also symlinked at `~/claude-sprint.status`.
-6. Kills the wrapping `screen` session automatically once the sprint ends.
+3. Streams all output to a timestamped, project-tagged log file (`~/claude-sprint-<project>-<YYYYMMDD-HHMMSS>-<session-tag>.log`) so every run is preserved, with `~/claude-sprint-<project>.log` as a symlink to the most recent run on that project.
+4. Watches the log for `DONE` or `NO TASKS` — Claude's signals for "batch done" and "backlog empty", respectively.
+5. Writes a timestamped status file alongside the log, also symlinked at `~/claude-sprint-<project>.status`.
+6. Uses per-project screen session names (`claude-sprint-<project>`) so multiple sprints can run in parallel without collision.
+7. Kills the wrapping `screen` session automatically once the sprint ends.
 
 ---
 
@@ -119,13 +120,14 @@ Good for: "burn my plan on this backlog and stop at 100%" / "max out at 50% so I
 
 ### Watching it live (optional)
 
-The sprint runs detached in the background — you don't have to attach. But if you want to peek at it live:
+The sprint runs detached in the background — you don't have to attach. But if you want to peek at it live, use the per-project screen name (printed by the script at startup):
 
 ```bash
-screen -r claude-sprint
+screen -r claude-sprint-<project>       # e.g. screen -r claude-sprint-eit-infosource
+screen -ls | grep claude-sprint         # if you forgot the project tag
 ```
 
-To detach again without killing it: `Ctrl+a` then `d`. To stop watching and let it keep running: just detach. To kill the sprint: `screen -X -S claude-sprint quit`.
+To detach again without killing it: `Ctrl+a` then `d`. To stop watching and let it keep running: just detach. To kill the sprint: `screen -X -S claude-sprint-<project> quit`.
 
 ---
 
@@ -134,17 +136,19 @@ To detach again without killing it: `Ctrl+a` then `d`. To stop watching and let 
 From any machine with SSH access:
 
 ```bash
-# Is the screen session still alive?
-screen -ls
+# List all active sprint screen sessions (one per project)
+screen -ls | grep claude-sprint
 
-# Current status (DONE / INCOMPLETE / ERROR)
-cat ~/claude-sprint.status
+# Current status for a specific project
+cat ~/claude-sprint-<project>.status
 
-# Tail the live log
-tail -f ~/claude-sprint.log
+# Tail the live log for a specific project
+tail -f ~/claude-sprint-<project>.log
 ```
 
-`~/claude-sprint.log` and `~/claude-sprint.status` are symlinks that always point to the most recent run. The actual files are timestamped (e.g. `~/claude-sprint-20260418-043700-ff983357.log`) and persist across runs, so you can `ls -lt ~/claude-sprint-*.log` to browse history.
+`~/claude-sprint-<project>.log` and `~/claude-sprint-<project>.status` are symlinks that always point to the most recent run on that project. The actual files are timestamped (e.g. `~/claude-sprint-eit-infosource-20260418-043700-ff983357.log`) and persist across runs, so you can `ls -lt ~/claude-sprint-*.log` to browse history across all projects.
+
+Multiple sprints can run in parallel — each project gets its own screen session name (`claude-sprint-<project>`) and its own log symlinks, so two sprints on different projects don't step on each other. The script prints the exact paths and screen name for the current run at startup.
 
 When `screen -ls` shows no matching session, the sprint has ended — check the status file to see how.
 
@@ -152,7 +156,7 @@ When `screen -ls` shows no matching session, the sprint has ended — check the 
 
 ## Status file meanings
 
-`~/claude-sprint.status` is written when the sprint ends. It contains one of:
+`~/claude-sprint-<project>.status` is written when the sprint ends. It contains one of:
 
 - **`DONE`** — The last pass Claude ran emitted `DONE` — the current batch of work is complete, but more may remain in later passes. In multi-pass mode the loop keeps going on DONE (that's the point).
 - **`NO_TASKS`** — The main agent emitted `NO TASKS` — it searched the backlog (plan files, git status, TODOs) and genuinely found nothing left to do. Hard stop; remaining passes are skipped so you don't burn credits on empty iterations.
@@ -343,11 +347,14 @@ The match is deliberately loose to catch both output shapes. This means a messag
 When you return:
 
 ```bash
-# Check outcome
-cat ~/claude-sprint.status
+# Check outcome for a specific project
+cat ~/claude-sprint-<project>.status
 
-# Review full log
-less ~/claude-sprint.log
+# Review full log for that project
+less ~/claude-sprint-<project>.log
+
+# List outcomes across all projects
+ls -lt ~/claude-sprint-*.status
 
 # Check what git/docker state the sprint left behind
 cd /path/to/project
@@ -369,22 +376,23 @@ If status is `INCOMPLETE` or `ERROR`, review the log to see where things stopped
 All configuration lives at the top of the script:
 
 ```bash
-PROJECT_DIR=$(pwd)                     # Default. Override with --project-dir PATH
-                                       #   or CLAUDE_SPRINT_PROJECT_DIR env var
-SCREEN_NAME="claude-sprint"            # Must match the screen -S name used to launch
-PLAN_CAP_USD=100                       # Dollar proxy for 100% of your Claude Max plan
-                                       #   (Max 5x ≈ $100, Max 20x ≈ $200; tune to your bill)
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)       # Generated per-run
-SESSION_TAG=...                        # First 8 chars of SESSION_ID, or "fresh"
-LOG_FILE="$HOME/claude-sprint-${TIMESTAMP}-${SESSION_TAG}.log"
-STATUS_FILE="$HOME/claude-sprint-${TIMESTAMP}-${SESSION_TAG}.status"
-LATEST_LOG_LINK="$HOME/claude-sprint.log"      # Symlink → current LOG_FILE
-LATEST_STATUS_LINK="$HOME/claude-sprint.status" # Symlink → current STATUS_FILE
+PROJECT_DIR=$(pwd)                             # Default. Override with --project-dir PATH
+                                               #   or CLAUDE_SPRINT_PROJECT_DIR env var
+PROJECT_TAG=basename($PROJECT_DIR) sanitized   # e.g. "eit-infosource", "nextjs-theme"
+SCREEN_NAME="claude-sprint-${PROJECT_TAG}"     # Unique per project; lets parallel runs coexist
+PLAN_CAP_USD=100                               # Dollar proxy for 100% of your Claude Max plan
+                                               #   (Max 5x ≈ $100, Max 20x ≈ $200)
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)               # Generated per-run
+SESSION_TAG=...                                # First 8 chars of SESSION_ID, or "fresh"
+LOG_FILE="$HOME/claude-sprint-${PROJECT_TAG}-${TIMESTAMP}-${SESSION_TAG}.log"
+STATUS_FILE="$HOME/claude-sprint-${PROJECT_TAG}-${TIMESTAMP}-${SESSION_TAG}.status"
+LATEST_LOG_LINK="$HOME/claude-sprint-${PROJECT_TAG}.log"      # Symlink → current LOG_FILE
+LATEST_STATUS_LINK="$HOME/claude-sprint-${PROJECT_TAG}.status" # Symlink → current STATUS_FILE
 ```
 
-Each run gets its own timestamped log and status file (so history is preserved), plus the `~/claude-sprint.log` and `~/claude-sprint.status` symlinks are repointed at the active run's files — so the standard `tail -f` / `cat` commands always show "the current run."
+Each run gets its own timestamped, project-tagged log and status file (so history is preserved), plus the `~/claude-sprint-<project>.log` and `~/claude-sprint-<project>.status` symlinks are repointed at the active run's files — so `tail -f ~/claude-sprint-<project>.log` always shows the current run for that project.
 
-To run multiple sprints on different projects in parallel, make copies of the script with different `SCREEN_NAME` and `LATEST_LOG_LINK` / `LATEST_STATUS_LINK` values, and launch each in its own named screen session.
+Multiple sprints on different projects run in parallel without any extra configuration — the project tag (derived from `basename(PROJECT_DIR)`) namespaces the screen session and the log/status symlinks automatically. Just `cd` into each project and fire off the script.
 
 ---
 
@@ -408,10 +416,10 @@ The `-c` continue flag couldn't find a resumable session in the current director
 Check that the script is executable (`chmod +x ~/claude-sprint.sh`) and that `PROJECT_DIR` exists.
 
 **Sprint stalls with no output**
-Claude likely hit a Bash command not on the allowlist and is waiting for approval. `tail -f ~/claude-sprint.log` to see the last command attempted. To fix, add that command pattern to `--allowedTools` and restart.
+Claude likely hit a Bash command not on the allowlist and is waiting for approval. `tail -f ~/claude-sprint-<project>.log` to see the last command attempted. To fix, add that command pattern to `--allowedTools` and restart.
 
 **Status never changes from initial blank**
-The screen session is still running. `screen -ls` to confirm, `screen -r claude-sprint` to attach and see what's happening.
+The screen session is still running. `screen -ls | grep claude-sprint` to list them, `screen -r claude-sprint-<project>` to attach and see what's happening.
 
 **`DONE` detected prematurely**
 Claude said "DONE" earlier in the log for some reason (quoted someone, described task status, etc.). Tighten the grep in the script to only check the last N lines, or require `DONE` to be the last non-empty line.

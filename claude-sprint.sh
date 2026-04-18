@@ -120,7 +120,17 @@ elif [[ -n "${CLAUDE_SPRINT_PROJECT_DIR:-}" ]]; then
 else
   PROJECT_DIR="$(pwd)"
 fi
-SCREEN_NAME="claude-sprint"
+
+# Derive a project-unique tag from PROJECT_DIR's basename so multiple sprints
+# on different projects can run in parallel without colliding on the screen
+# session name or the "latest" symlink paths. Sanitize to [a-zA-Z0-9_-] so the
+# result is always a valid screen session name.
+PROJECT_BASENAME=$(basename "$PROJECT_DIR")
+PROJECT_TAG=$(echo "$PROJECT_BASENAME" | tr -c 'a-zA-Z0-9_-' '_' | sed 's/__*/_/g; s/^_//; s/_$//')
+if [[ -z "$PROJECT_TAG" ]]; then
+  PROJECT_TAG="project"
+fi
+SCREEN_NAME="claude-sprint-$PROJECT_TAG"
 # PLAN_CAP_USD: dollar proxy for 100% of your Claude Max plan's usage limit.
 # Since Claude Code doesn't expose "percent of plan" directly, --usage N% is
 # computed as N% of this value. Tune to match your observed monthly spend at
@@ -143,10 +153,10 @@ if [[ -n "$SESSION_ID" ]]; then
 else
   SESSION_TAG="fresh"
 fi
-LOG_FILE="$HOME/claude-sprint-${TIMESTAMP}-${SESSION_TAG}.log"
-STATUS_FILE="$HOME/claude-sprint-${TIMESTAMP}-${SESSION_TAG}.status"
-LATEST_LOG_LINK="$HOME/claude-sprint.log"
-LATEST_STATUS_LINK="$HOME/claude-sprint.status"
+LOG_FILE="$HOME/claude-sprint-${PROJECT_TAG}-${TIMESTAMP}-${SESSION_TAG}.log"
+STATUS_FILE="$HOME/claude-sprint-${PROJECT_TAG}-${TIMESTAMP}-${SESSION_TAG}.status"
+LATEST_LOG_LINK="$HOME/claude-sprint-${PROJECT_TAG}.log"
+LATEST_STATUS_LINK="$HOME/claude-sprint-${PROJECT_TAG}.status"
 # --------------
 
 # Self-detach: if not already inside screen, re-exec inside a detached screen
