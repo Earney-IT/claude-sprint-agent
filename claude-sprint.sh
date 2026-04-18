@@ -331,28 +331,35 @@ for (( pass=1; pass<=PASSES; pass++ )); do
   fi
 
   # Detect terminal markers within this pass's output only.
-  # NO TASKS is a hard stop. To avoid false positives from subagents or
-  # teammates saying "NO TASKS" in their own reports, we ONLY check the main
-  # agent's final result event (the top-level "type":"result" line — there is
-  # exactly one per headless -p invocation, and it carries the main agent's
-  # final response). Subagent/teammate outputs live inside assistant messages
-  # and never produce their own result events at this level.
+  # Only the main agent's final "type":"result" event counts — subagent and
+  # teammate outputs live inside assistant messages and never produce their
+  # own top-level result events, so this avoids false positives from nested
+  # reports echoing "DONE"/"NO TASKS".
+  #
+  # Parse with jq rather than brittle regex on the raw JSON line: the result
+  # field can contain arbitrary preceding text (commentary, report summary)
+  # and the DONE/NO TASKS sentinel appears on the final line, preceded by
+  # escaped newlines. We extract the full result string (jq -r unescapes \n
+  # to real newlines) and check the last non-empty, trimmed line.
   PASS_OUTPUT=$(tail -n +$((PASS_START + 1)) "$LOG_FILE")
-  MAIN_RESULT=$(echo "$PASS_OUTPUT" | grep '"type":"result"' | tail -1)
+  RESULT_LINE=$(echo "$PASS_OUTPUT" | grep '"type":"result"' | tail -1)
+  MAIN_RESULT_TEXT=$(echo "$RESULT_LINE" | jq -r '.result // empty' 2>/dev/null)
+  LAST_LINE=$(echo "$MAIN_RESULT_TEXT" | awk 'NF' | tail -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   PASS_NO_TASKS=0
   PASS_DONE=0
-  if echo "$MAIN_RESULT" | grep -q '"result":"NO TASKS"'; then
+  if [[ "$LAST_LINE" == "NO TASKS" ]]; then
     echo "[$(date)] Pass $pass: NO TASKS detected from main agent — backlog is empty." | tee -a "$LOG_FILE"
     PASS_NO_TASKS=1
-  elif echo "$MAIN_RESULT" | grep -q '"result":"DONE"' || \
-       echo "$PASS_OUTPUT" | grep -qE '(^|[^A-Z])DONE([^A-Z]|$)'; then
+  elif [[ "$LAST_LINE" == "DONE" ]]; then
     echo "[$(date)] Pass $pass: DONE detected." | tee -a "$LOG_FILE"
     OVERALL_STATUS="DONE"
     PASS_DONE=1
   fi
 
-  # Extract this pass's cost from its result event and update cumulative total
-  PASS_COST=$(echo "$PASS_OUTPUT" | grep '"type":"result"' | tail -1 | grep -oE '"total_cost_usd":[0-9.]+' | head -1 | sed 's/.*://')
+  # Extract this pass's cost from the result event. jq handles both fixed
+  # and scientific notation; the old grep pattern [0-9.]+ silently truncated
+  # values like 8.25e-2.
+  PASS_COST=$(echo "$RESULT_LINE" | jq -r '.total_cost_usd // empty' 2>/dev/null)
   if [[ -n "$PASS_COST" ]]; then
     CUMULATIVE_COST_USD=$(awk -v a="$CUMULATIVE_COST_USD" -v b="$PASS_COST" 'BEGIN { printf "%.4f", a + b }')
     echo "[$(date)] Pass $pass cost: \$${PASS_COST}  |  cumulative: \$${CUMULATIVE_COST_USD}" | tee -a "$LOG_FILE"
