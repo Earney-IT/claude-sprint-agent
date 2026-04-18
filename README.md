@@ -83,6 +83,25 @@ Behavior:
 
 Good for: finishing a multi-phase plan where the "done" marker only reflects the most recent batch, not the whole backlog. Bad for: single-task sprints where you know a `DONE` means truly done — stick with `--passes 1` (the default) to avoid extra cost.
 
+### Option D — Budget-capped sprint (`--usage N%`)
+
+For when you want to run as long as possible on your Claude Max plan without blowing past your monthly allowance:
+
+```bash
+~/claude-sprint.sh <session-id> --passes 50 --usage 100%   # run until 100% or 50 passes
+~/claude-sprint.sh <session-id> --passes 20 --usage 50%    # run until 50% or 20 passes
+```
+
+How it works:
+- Each pass's `total_cost_usd` is extracted from its stream-json `result` event and accumulated.
+- Between passes, the script checks whether cumulative cost has reached the budget. If so, it stops with status `USAGE_LIMIT`.
+- The check is **between passes, not mid-pass** — so the actual stop may overshoot the target by up to one pass's cost. Set `--max-turns` lower or use a smaller `--usage` percentage if that matters to you.
+- Pairs naturally with `--passes N` — set passes to a large number and let `--usage` be the real stop condition.
+
+The percentage is computed against `PLAN_CAP_USD` (a constant at the top of the script). Defaults to `$100` which is the rough monthly equivalent of Claude Max 5x. For Max 20x, edit the script and set `PLAN_CAP_USD=200`. Because Claude Code doesn't expose "percent of plan" directly, this is a proxy based on observed API dollar spend — calibrate `PLAN_CAP_USD` to whatever your monthly bill is when you're genuinely at 100% plan usage.
+
+Good for: "burn my plan on this backlog and stop at 100%" / "max out at 50% so I have headroom for the rest of the week." Not exact — treat the percentage as a soft target, not a hard guarantee.
+
 ### Watching it live (optional)
 
 The sprint runs detached in the background — you don't have to attach. But if you want to peek at it live:
@@ -120,9 +139,10 @@ When `screen -ls` shows no matching session, the sprint has ended — check the 
 
 `~/claude-sprint.status` is written when the sprint ends. It contains one of:
 
-- **`DONE`** — Claude finished the task list and said `DONE`. Clean success.
-- **`INCOMPLETE`** — Claude exited without saying `DONE`. Usually means it hit `--max-turns` (300) or the stop condition was met some other way. Check the log to see where it stopped.
-- **`ERROR`** — Claude exited non-zero. Something went wrong. Log will have details.
+- **`DONE`** — The last pass Claude ran emitted `DONE`. In multi-pass mode, this also means every earlier pass emitted `DONE` (otherwise the run would have stopped earlier as `INCOMPLETE`). Clean success.
+- **`INCOMPLETE`** — A pass exited without emitting `DONE` (usually because it hit `--max-turns`). Check the log to see where it stopped.
+- **`USAGE_LIMIT`** — The cumulative cost across passes reached the `--usage N%` threshold and the multi-pass run stopped on purpose. Not a failure — just the budget working as configured.
+- **`ERROR`** — A pass exited non-zero. Something went wrong. Log will have details.
 
 ---
 
@@ -285,8 +305,9 @@ All configuration lives at the top of the script:
 
 ```bash
 PROJECT_DIR="$HOME/eit-infosource"     # Where the sprint runs
-SESSION_ID="${1:-}"                    # Optional positional arg
 SCREEN_NAME="claude-sprint"            # Must match the screen -S name used to launch
+PLAN_CAP_USD=100                       # Dollar proxy for 100% of your Claude Max plan
+                                       #   (Max 5x ≈ $100, Max 20x ≈ $200; tune to your bill)
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)       # Generated per-run
 SESSION_TAG=...                        # First 8 chars of SESSION_ID, or "fresh"
 LOG_FILE="$HOME/claude-sprint-${TIMESTAMP}-${SESSION_TAG}.log"

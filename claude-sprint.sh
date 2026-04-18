@@ -2,15 +2,18 @@
 set -uo pipefail
 
 # --- Arg parsing ---
-# Usage: claude-sprint.sh [session-id] [--passes N]
+# Usage: claude-sprint.sh [session-id] [--passes N] [--usage N%]
 #   session-id: Claude Code session ID to resume (optional positional)
 #   --passes N: run sprint up to N times, continuing on DONE (default 1)
+#   --usage N%: stop multi-pass run after cumulative cost reaches N% of PLAN_CAP_USD
 #
 # Multi-pass behavior: if Claude emits DONE but more passes remain, the script
 # re-runs the same sprint (resuming the same session) so Claude gets another
 # chance to pick up work it might have prematurely considered finished.
-# Stops early on INCOMPLETE (max-turns hit without DONE) or ERROR (non-zero exit).
+# Stops early on INCOMPLETE (max-turns hit without DONE), ERROR (non-zero exit),
+# or USAGE_LIMIT (cumulative cost crossed the --usage threshold).
 PASSES=1
+USAGE_PERCENT=""
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -22,19 +25,37 @@ while [[ $# -gt 0 ]]; do
       PASSES="${1#--passes=}"
       shift
       ;;
+    --usage)
+      USAGE_PERCENT="$2"
+      shift 2
+      ;;
+    --usage=*)
+      USAGE_PERCENT="${1#--usage=}"
+      shift
+      ;;
     -h|--help)
       cat <<EOF
-Usage: $(basename "$0") [session-id] [--passes N]
+Usage: $(basename "$0") [session-id] [--passes N] [--usage N%]
 
   session-id  Claude Code session ID to resume (optional). If omitted, starts fresh.
   --passes N  Run the sprint up to N times. After each DONE, re-run up to N-1
               more times. Stops early on INCOMPLETE or ERROR. Default: 1.
+  --usage N%  Stop the multi-pass run once cumulative cost (summed across passes
+              from stream-json result events) reaches N% of PLAN_CAP_USD. The
+              check runs between passes, so the actual stop may overshoot the
+              target by up to one pass's cost. Accepts "50%" or "50". Edit
+              PLAN_CAP_USD at the top of the script to match your Claude Max
+              tier (default \$100 ≈ Max 5x; use \$200 for Max 20x).
 
 Examples:
   $(basename "$0")                              # fresh sprint, 1 pass
   $(basename "$0") abc123def                    # resume session, 1 pass
   $(basename "$0") --passes 3                   # fresh sprint, up to 3 passes
   $(basename "$0") abc123def --passes 3         # resume, up to 3 passes
+  $(basename "$0") abc123def --passes 50 --usage 100%
+                                                # resume, run until 100% plan
+                                                # cap or 50 passes, whichever first
+  $(basename "$0") abc123def --usage 50%        # resume, 1 pass, stop if over 50%
 EOF
       exit 0
       ;;
@@ -54,6 +75,22 @@ fi
 # --- Config ---
 PROJECT_DIR="$HOME/eit-infosource"
 SCREEN_NAME="claude-sprint"
+# PLAN_CAP_USD: dollar proxy for 100% of your Claude Max plan's usage limit.
+# Since Claude Code doesn't expose "percent of plan" directly, --usage N% is
+# computed as N% of this value. Tune to match your observed monthly spend at
+# 100% plan usage. Rough defaults: Max 5x ≈ $100, Max 20x ≈ $200.
+PLAN_CAP_USD=100
+
+# Resolve --usage N% → absolute dollar cap
+USAGE_CAP_USD=""
+if [[ -n "$USAGE_PERCENT" ]]; then
+  PCT="${USAGE_PERCENT%\%}"
+  if ! [[ "$PCT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "Error: --usage must be a percentage like 50% or 100% (got: $USAGE_PERCENT)" >&2
+    exit 1
+  fi
+  USAGE_CAP_USD=$(awk -v pct="$PCT" -v cap="$PLAN_CAP_USD" 'BEGIN { printf "%.4f", cap * pct / 100 }')
+fi
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 if [[ -n "$SESSION_ID" ]]; then
   SESSION_TAG="${SESSION_ID:0:8}"        # first 8 chars of session ID
@@ -88,6 +125,9 @@ ln -sf "$STATUS_FILE" "$LATEST_STATUS_LINK"
 echo "[$(date)] Starting Claude sprint in $PROJECT_DIR (passes: up to $PASSES)" | tee -a "$LOG_FILE"
 echo "[$(date)] Log file: $LOG_FILE" | tee -a "$LOG_FILE"
 echo "[$(date)] Status file: $STATUS_FILE" | tee -a "$LOG_FILE"
+if [[ -n "$USAGE_CAP_USD" ]]; then
+  echo "[$(date)] Usage cap: ${USAGE_PERCENT%\%}% of \$${PLAN_CAP_USD} = \$${USAGE_CAP_USD}" | tee -a "$LOG_FILE"
+fi
 
 # --- Sprint prompt ---
 # Captured into a variable so it can be passed as the value of -p, avoiding
@@ -101,12 +141,23 @@ PROMPT_EOF
 # --- Multi-pass loop ---
 OVERALL_STATUS="INCOMPLETE"
 FINAL_EXIT=0
+CUMULATIVE_COST_USD="0"
 
 for (( pass=1; pass<=PASSES; pass++ )); do
   echo "" | tee -a "$LOG_FILE"
   echo "============================================================" | tee -a "$LOG_FILE"
   echo "[$(date)] Pass $pass of $PASSES" | tee -a "$LOG_FILE"
   echo "============================================================" | tee -a "$LOG_FILE"
+
+  # Pre-pass usage-cap check (stop before spending any more if already over)
+  if [[ -n "$USAGE_CAP_USD" ]]; then
+    OVER=$(awk -v c="$CUMULATIVE_COST_USD" -v cap="$USAGE_CAP_USD" 'BEGIN { print (c+0 >= cap+0) ? 1 : 0 }')
+    if [[ "$OVER" == "1" ]]; then
+      echo "[$(date)] Usage cap already reached before pass $pass (\$${CUMULATIVE_COST_USD} >= \$${USAGE_CAP_USD}) — stopping." | tee -a "$LOG_FILE"
+      OVERALL_STATUS="USAGE_LIMIT"
+      break
+    fi
+  fi
 
   # Build --resume flag from current SESSION_ID (captured from pass 1 if fresh)
   RESUME_FLAG=""
@@ -175,8 +226,34 @@ for (( pass=1; pass<=PASSES; pass++ )); do
      echo "$PASS_OUTPUT" | grep -qE '(^|[^A-Z])DONE([^A-Z]|$)'; then
     echo "[$(date)] Pass $pass: DONE detected." | tee -a "$LOG_FILE"
     OVERALL_STATUS="DONE"
-    # Continue to next pass if any remain
+    PASS_DONE=1
   else
+    PASS_DONE=0
+  fi
+
+  # Extract this pass's cost from its result event and update cumulative total
+  PASS_COST=$(echo "$PASS_OUTPUT" | grep '"type":"result"' | tail -1 | grep -oE '"total_cost_usd":[0-9.]+' | head -1 | sed 's/.*://')
+  if [[ -n "$PASS_COST" ]]; then
+    CUMULATIVE_COST_USD=$(awk -v a="$CUMULATIVE_COST_USD" -v b="$PASS_COST" 'BEGIN { printf "%.4f", a + b }')
+    echo "[$(date)] Pass $pass cost: \$${PASS_COST}  |  cumulative: \$${CUMULATIVE_COST_USD}" | tee -a "$LOG_FILE"
+  else
+    echo "[$(date)] Pass $pass: could not extract cost from result event" | tee -a "$LOG_FILE"
+  fi
+
+  # Post-pass usage-cap check — trumps DONE/continue logic so we always exit
+  # once we've crossed the budget.
+  if [[ -n "$USAGE_CAP_USD" ]]; then
+    OVER=$(awk -v c="$CUMULATIVE_COST_USD" -v cap="$USAGE_CAP_USD" 'BEGIN { print (c+0 >= cap+0) ? 1 : 0 }')
+    if [[ "$OVER" == "1" ]]; then
+      echo "[$(date)] Usage cap reached after pass $pass (\$${CUMULATIVE_COST_USD} >= \$${USAGE_CAP_USD}) — stopping." | tee -a "$LOG_FILE"
+      OVERALL_STATUS="USAGE_LIMIT"
+      break
+    fi
+  fi
+
+  # No DONE marker → treat as INCOMPLETE and stop (don't burn more passes on a
+  # stuck session). Only reached if we didn't already break on USAGE_LIMIT.
+  if [[ "$PASS_DONE" != "1" ]]; then
     echo "[$(date)] Pass $pass: no DONE marker (INCOMPLETE) — stopping multi-pass run." | tee -a "$LOG_FILE"
     OVERALL_STATUS="INCOMPLETE"
     break
@@ -186,7 +263,7 @@ done
 # Write final status
 echo "$OVERALL_STATUS" > "$STATUS_FILE"
 echo "" | tee -a "$LOG_FILE"
-echo "[$(date)] Multi-pass run complete. Overall status: $OVERALL_STATUS" | tee -a "$LOG_FILE"
+echo "[$(date)] Multi-pass run complete. Overall status: $OVERALL_STATUS  |  total cost: \$${CUMULATIVE_COST_USD}" | tee -a "$LOG_FILE"
 
 # Kill the screen session if we're inside one
 if [[ -n "${STY:-}" ]]; then
