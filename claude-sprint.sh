@@ -5,8 +5,16 @@ set -uo pipefail
 PROJECT_DIR="$HOME/eit-infosource"
 SESSION_ID="${1:-}"                      # optional: pass session ID as first arg
 SCREEN_NAME="claude-sprint"
-LOG_FILE="$HOME/claude-sprint.log"
-STATUS_FILE="$HOME/claude-sprint.status"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+if [[ -n "$SESSION_ID" ]]; then
+  SESSION_TAG="${SESSION_ID:0:8}"        # first 8 chars of session ID
+else
+  SESSION_TAG="fresh"
+fi
+LOG_FILE="$HOME/claude-sprint-${TIMESTAMP}-${SESSION_TAG}.log"
+STATUS_FILE="$HOME/claude-sprint-${TIMESTAMP}-${SESSION_TAG}.status"
+LATEST_LOG_LINK="$HOME/claude-sprint.log"
+LATEST_STATUS_LINK="$HOME/claude-sprint.status"
 # --------------
 
 # Self-detach: if not already inside screen, re-exec inside a detached screen
@@ -14,8 +22,8 @@ STATUS_FILE="$HOME/claude-sprint.status"
 if [[ -z "${STY:-}" ]]; then
   echo "Starting Claude sprint in detached screen session: $SCREEN_NAME"
   echo "  Watch live:    screen -r $SCREEN_NAME"
-  echo "  Tail log:      tail -f $LOG_FILE"
-  echo "  Check status:  cat $STATUS_FILE"
+  echo "  Tail log:      tail -f $LATEST_LOG_LINK"
+  echo "  Check status:  cat $LATEST_STATUS_LINK"
   exec screen -dmS "$SCREEN_NAME" "$0" "$@"
 fi
 
@@ -27,11 +35,15 @@ if [[ -n "$SESSION_ID" ]]; then
   RESUME_FLAG="--resume $SESSION_ID"
 fi
 
-# Clear prior run artifacts
+# Create this run's log/status files and point the "latest" symlinks at them
 : > "$LOG_FILE"
 : > "$STATUS_FILE"
+ln -sf "$LOG_FILE" "$LATEST_LOG_LINK"
+ln -sf "$STATUS_FILE" "$LATEST_STATUS_LINK"
 
 echo "[$(date)] Starting Claude sprint in $PROJECT_DIR" | tee -a "$LOG_FILE"
+echo "[$(date)] Log file: $LOG_FILE" | tee -a "$LOG_FILE"
+echo "[$(date)] Status file: $STATUS_FILE" | tee -a "$LOG_FILE"
 
 # --- Sprint prompt ---
 # Captured into a variable so it can be passed as the value of -p, avoiding

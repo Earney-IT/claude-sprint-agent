@@ -10,9 +10,9 @@ Built for the workflow: *work with Claude Code interactively, then hand off a sc
 
 1. Runs `claude` in headless print mode (`-p`) with a scoped permission set tuned for dev work.
 2. Optionally resumes a prior Claude Code session so Claude keeps the full context of what you were working on.
-3. Streams all output to `~/claude-sprint.log` for later review.
+3. Streams all output to a timestamped log file (`~/claude-sprint-<YYYYMMDD-HHMMSS>-<session-tag>.log`) so every run is preserved, with `~/claude-sprint.log` as a symlink to the most recent run.
 4. Watches the log for `DONE` — the signal Claude emits when the task list is complete.
-5. Writes a status file (`~/claude-sprint.status`) so you can check the outcome at a glance.
+5. Writes a timestamped status file alongside the log, also symlinked at `~/claude-sprint.status`.
 6. Kills the wrapping `screen` session automatically once the sprint ends.
 
 ---
@@ -92,6 +92,8 @@ cat ~/claude-sprint.status
 # Tail the live log
 tail -f ~/claude-sprint.log
 ```
+
+`~/claude-sprint.log` and `~/claude-sprint.status` are symlinks that always point to the most recent run. The actual files are timestamped (e.g. `~/claude-sprint-20260418-043700-ff983357.log`) and persist across runs, so you can `ls -lt ~/claude-sprint-*.log` to browse history.
 
 When `screen -ls` shows no matching session, the sprint has ended — check the status file to see how.
 
@@ -268,11 +270,17 @@ All configuration lives at the top of the script:
 PROJECT_DIR="$HOME/eit-infosource"     # Where the sprint runs
 SESSION_ID="${1:-}"                    # Optional positional arg
 SCREEN_NAME="claude-sprint"            # Must match the screen -S name used to launch
-LOG_FILE="$HOME/claude-sprint.log"
-STATUS_FILE="$HOME/claude-sprint.status"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)       # Generated per-run
+SESSION_TAG=...                        # First 8 chars of SESSION_ID, or "fresh"
+LOG_FILE="$HOME/claude-sprint-${TIMESTAMP}-${SESSION_TAG}.log"
+STATUS_FILE="$HOME/claude-sprint-${TIMESTAMP}-${SESSION_TAG}.status"
+LATEST_LOG_LINK="$HOME/claude-sprint.log"      # Symlink → current LOG_FILE
+LATEST_STATUS_LINK="$HOME/claude-sprint.status" # Symlink → current STATUS_FILE
 ```
 
-To run multiple sprints on different projects in parallel, make copies of the script with different `SCREEN_NAME`, `LOG_FILE`, and `STATUS_FILE` values, and launch each in its own named screen session.
+Each run gets its own timestamped log and status file (so history is preserved), plus the `~/claude-sprint.log` and `~/claude-sprint.status` symlinks are repointed at the active run's files — so the standard `tail -f` / `cat` commands always show "the current run."
+
+To run multiple sprints on different projects in parallel, make copies of the script with different `SCREEN_NAME` and `LATEST_LOG_LINK` / `LATEST_STATUS_LINK` values, and launch each in its own named screen session.
 
 ---
 
