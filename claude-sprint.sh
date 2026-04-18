@@ -33,8 +33,19 @@ fi
 
 echo "[$(date)] Starting Claude sprint in $PROJECT_DIR" | tee -a "$LOG_FILE"
 
-# Run Claude, tee to log, and when it exits write status
-claude -p $RESUME_FLAG \
+# --- Sprint prompt ---
+# Captured into a variable so it can be passed as the value of -p, avoiding
+# argument-parsing collisions with the multi-value --allowedTools flag.
+# Using `read -d ''` (not $(cat <<EOF)) because bash -n misparses literal
+# $(...) inside a heredoc nested in command substitution.
+IFS= read -r -d '' SPRINT_PROMPT <<'PROMPT_EOF' || true
+Continue working through the remaining tasks in order. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use 'docker compose' targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like 'docker system prune', 'docker volume prune', 'docker image prune -a', 'docker rm $(docker ps -aq)', or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When all tasks are done, respond with exactly 'DONE' and stop.
+PROMPT_EOF
+
+# Run Claude. Prompt is passed as the value of -p (not as a trailing positional)
+# so the long --allowedTools list can't accidentally swallow it.
+claude -p "$SPRINT_PROMPT" \
+  $RESUME_FLAG \
   --permission-mode acceptEdits \
   --effort max \
   --max-turns 300 \
@@ -56,7 +67,6 @@ claude -p $RESUME_FLAG \
     "Bash(ps*)" "Bash(top*)" "Bash(htop*)" "Bash(kill*)" "Bash(pkill*)" "Bash(lsof*)" "Bash(netstat*)" "Bash(ss*)" \
     "Bash(systemctl status*)" "Bash(journalctl*)" "Bash(service * status)" \
     "Bash(psql*)" "Bash(mysql*)" "Bash(redis-cli*)" "Bash(sqlite3*)" "Bash(mongosh*)" \
-  "Continue working through the remaining tasks in order. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use 'docker compose' targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like 'docker system prune', 'docker volume prune', 'docker image prune -a', 'docker rm \$(docker ps -aq)', or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When all tasks are done, respond with exactly 'DONE' and stop." \
   2>&1 | tee -a "$LOG_FILE"
 
 CLAUDE_EXIT=${PIPESTATUS[0]}
