@@ -29,9 +29,10 @@ Built for the workflow: *work with Claude Code interactively, then hand off a sc
 
 ## Installation
 
-1. Download the script to your home directory and make it executable (the `chmod +x` is required — `wget` saves files without the execute bit):
+1. Download the script and make it executable (`wget` saves files without the execute bit, so `chmod +x` is required):
    ```bash
-   wget https://raw.githubusercontent.com/Earney-IT/claude-sprint-agent/refs/heads/main/claude-sprint.sh -O ~/claude-sprint.sh && chmod +x ~/claude-sprint.sh
+   wget https://raw.githubusercontent.com/Earney-IT/claude-sprint-agent/refs/heads/main/claude-sprint.sh -O ~/claude-sprint.sh
+   chmod +x ~/claude-sprint.sh
    ```
 2. Edit the top of the script and set `PROJECT_DIR` to the directory where your project lives.
 
