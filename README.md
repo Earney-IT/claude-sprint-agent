@@ -102,6 +102,18 @@ The percentage is computed against `PLAN_CAP_USD` (a constant at the top of the 
 
 Good for: "burn my plan on this backlog and stop at 100%" / "max out at 50% so I have headroom for the rest of the week." Not exact — treat the percentage as a soft target, not a hard guarantee.
 
+### Tuning effort and turn budget
+
+```bash
+~/claude-sprint.sh <session-id> --effort high              # cheaper per turn than max
+~/claude-sprint.sh <session-id> --max-turns 100 --passes 5 # shorter passes, more of them
+~/claude-sprint.sh <session-id> --effort max --max-turns 500
+                                                           # every knob cranked
+```
+
+- `--effort` accepts `low` / `medium` / `high` / `max`. Defaults to `max`. Lower = faster and cheaper per turn at the cost of reasoning quality.
+- `--max-turns N` is the per-pass turn budget (default `300`). When a pass hits it without emitting `DONE`, the run ends as `INCOMPLETE`. Pair with a big `--passes N` to turn one long pass into several shorter ones that each get a fresh turn counter.
+
 ### Watching it live (optional)
 
 The sprint runs detached in the background — you don't have to attach. But if you want to peek at it live:
@@ -153,13 +165,16 @@ The script runs:
 ```bash
 claude -p [--resume <session-id>] \
   --permission-mode acceptEdits \
-  --effort max \
-  --max-turns 300 \
+  --effort <EFFORT> \
+  --max-turns <MAX_TURNS> \
   --output-format stream-json \
+  --verbose \
   --include-partial-messages \
   --allowedTools <scoped dev toolkit> \
   "<sprint prompt>"
 ```
+
+`<EFFORT>` and `<MAX_TURNS>` come from wrapper flags `--effort` and `--max-turns` (defaults: `max` and `300`).
 
 ### Flag breakdown
 
@@ -168,9 +183,10 @@ claude -p [--resume <session-id>] \
 | `-p` | Print mode. Runs headless, streams to stdout, exits when done. |
 | `--resume <id>` | Continues a specific prior session by ID (only if you passed one in). |
 | `--permission-mode acceptEdits` | File edits auto-accept. Bash commands still filtered by allowlist. |
-| `--effort max` | Maximum reasoning effort per turn. Best output quality; higher token cost. |
-| `--max-turns 300` | Hard cap on agentic turns. Safety net against runaway loops. |
+| `--effort <level>` | Reasoning effort per turn. `max` = best output, highest cost. `low` / `medium` / `high` available for cheaper/faster work. Overridable via `--effort` wrapper flag. |
+| `--max-turns <N>` | Per-pass cap on agentic turns before the pass ends as INCOMPLETE. Overridable via `--max-turns` wrapper flag. |
 | `--output-format stream-json` | Structured JSON streaming output. Parseable, reviewable after the fact. |
+| `--verbose` | Required alongside `-p` + `stream-json`. |
 | `--include-partial-messages` | Include mid-turn partial content in the stream. Useful for live tailing. |
 | `--allowedTools` | Whitelist of Bash commands Claude can run without prompting. |
 

@@ -2,18 +2,12 @@
 set -uo pipefail
 
 # --- Arg parsing ---
-# Usage: claude-sprint.sh [session-id] [--passes N] [--usage N%]
-#   session-id: Claude Code session ID to resume (optional positional)
-#   --passes N: run sprint up to N times, continuing on DONE (default 1)
-#   --usage N%: stop multi-pass run after cumulative cost reaches N% of PLAN_CAP_USD
-#
-# Multi-pass behavior: if Claude emits DONE but more passes remain, the script
-# re-runs the same sprint (resuming the same session) so Claude gets another
-# chance to pick up work it might have prematurely considered finished.
-# Stops early on INCOMPLETE (max-turns hit without DONE), ERROR (non-zero exit),
-# or USAGE_LIMIT (cumulative cost crossed the --usage threshold).
+# Usage: claude-sprint.sh [session-id] [flags]
+# See --help for full reference.
 PASSES=1
 USAGE_PERCENT=""
+EFFORT="max"
+MAX_TURNS=300
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -33,29 +27,47 @@ while [[ $# -gt 0 ]]; do
       USAGE_PERCENT="${1#--usage=}"
       shift
       ;;
+    --effort)
+      EFFORT="$2"
+      shift 2
+      ;;
+    --effort=*)
+      EFFORT="${1#--effort=}"
+      shift
+      ;;
+    --max-turns)
+      MAX_TURNS="$2"
+      shift 2
+      ;;
+    --max-turns=*)
+      MAX_TURNS="${1#--max-turns=}"
+      shift
+      ;;
     -h|--help)
       cat <<EOF
-Usage: $(basename "$0") [session-id] [--passes N] [--usage N%]
+Usage: $(basename "$0") [session-id] [flags]
 
-  session-id  Claude Code session ID to resume (optional). If omitted, starts fresh.
-  --passes N  Run the sprint up to N times. After each DONE, re-run up to N-1
-              more times. Stops early on INCOMPLETE or ERROR. Default: 1.
-  --usage N%  Stop the multi-pass run once cumulative cost (summed across passes
-              from stream-json result events) reaches N% of PLAN_CAP_USD. The
-              check runs between passes, so the actual stop may overshoot the
-              target by up to one pass's cost. Accepts "50%" or "50". Edit
-              PLAN_CAP_USD at the top of the script to match your Claude Max
-              tier (default \$100 ≈ Max 5x; use \$200 for Max 20x).
+  session-id       Claude Code session ID to resume (optional).
+                   If omitted, starts fresh and captures the new ID for later passes.
+
+  --passes N       Run the sprint up to N times. After each DONE, re-run up to
+                   N-1 more times. Stops early on INCOMPLETE or ERROR. Default: 1.
+  --usage N%       Stop multi-pass once cumulative cost reaches N% of PLAN_CAP_USD.
+                   Accepts "50%" or "50". Checked between passes, so may overshoot
+                   by up to one pass's cost.
+  --effort LEVEL   Passed through to claude --effort. Default: max.
+                   Claude Code accepts: low, medium, high, max.
+                   Lower effort = faster / cheaper per turn, weaker reasoning.
+  --max-turns N    Passed through to claude --max-turns. Default: 300.
+                   Per-pass cap on agentic turns before the pass ends as INCOMPLETE.
 
 Examples:
-  $(basename "$0")                              # fresh sprint, 1 pass
-  $(basename "$0") abc123def                    # resume session, 1 pass
-  $(basename "$0") --passes 3                   # fresh sprint, up to 3 passes
-  $(basename "$0") abc123def --passes 3         # resume, up to 3 passes
-  $(basename "$0") abc123def --passes 50 --usage 100%
-                                                # resume, run until 100% plan
-                                                # cap or 50 passes, whichever first
-  $(basename "$0") abc123def --usage 50%        # resume, 1 pass, stop if over 50%
+  $(basename "$0")                                       # fresh, 1 pass, max effort
+  $(basename "$0") abc123def                             # resume, 1 pass
+  $(basename "$0") --passes 3                            # fresh, up to 3 passes
+  $(basename "$0") abc123def --passes 50 --usage 100%    # resume, budget-capped
+  $(basename "$0") abc123def --effort high               # cheaper per turn
+  $(basename "$0") abc123def --max-turns 100 --passes 5  # short passes, more of them
 EOF
       exit 0
       ;;
@@ -69,6 +81,16 @@ SESSION_ID="${POSITIONAL[0]:-}"
 
 if ! [[ "$PASSES" =~ ^[0-9]+$ ]] || [[ "$PASSES" -lt 1 ]]; then
   echo "Error: --passes must be a positive integer (got: $PASSES)" >&2
+  exit 1
+fi
+
+if ! [[ "$MAX_TURNS" =~ ^[0-9]+$ ]] || [[ "$MAX_TURNS" -lt 1 ]]; then
+  echo "Error: --max-turns must be a positive integer (got: $MAX_TURNS)" >&2
+  exit 1
+fi
+
+if [[ -z "$EFFORT" ]]; then
+  echo "Error: --effort cannot be empty" >&2
   exit 1
 fi
 
@@ -122,11 +144,14 @@ cd "$PROJECT_DIR" || { echo "Cannot cd to $PROJECT_DIR"; exit 1; }
 ln -sf "$LOG_FILE" "$LATEST_LOG_LINK"
 ln -sf "$STATUS_FILE" "$LATEST_STATUS_LINK"
 
-echo "[$(date)] Starting Claude sprint in $PROJECT_DIR (passes: up to $PASSES)" | tee -a "$LOG_FILE"
-echo "[$(date)] Log file: $LOG_FILE" | tee -a "$LOG_FILE"
-echo "[$(date)] Status file: $STATUS_FILE" | tee -a "$LOG_FILE"
+echo "[$(date)] Starting Claude sprint in $PROJECT_DIR" | tee -a "$LOG_FILE"
+echo "[$(date)] Log file:   $LOG_FILE" | tee -a "$LOG_FILE"
+echo "[$(date)] Status:     $STATUS_FILE" | tee -a "$LOG_FILE"
+echo "[$(date)] Passes:     up to $PASSES" | tee -a "$LOG_FILE"
+echo "[$(date)] Effort:     $EFFORT" | tee -a "$LOG_FILE"
+echo "[$(date)] Max turns:  $MAX_TURNS" | tee -a "$LOG_FILE"
 if [[ -n "$USAGE_CAP_USD" ]]; then
-  echo "[$(date)] Usage cap: ${USAGE_PERCENT%\%}% of \$${PLAN_CAP_USD} = \$${USAGE_CAP_USD}" | tee -a "$LOG_FILE"
+  echo "[$(date)] Usage cap:  ${USAGE_PERCENT%\%}% of \$${PLAN_CAP_USD} = \$${USAGE_CAP_USD}" | tee -a "$LOG_FILE"
 fi
 
 # Enable agent teams (experimental, disabled by default in Claude Code).
@@ -181,8 +206,8 @@ for (( pass=1; pass<=PASSES; pass++ )); do
   claude -p "$SPRINT_PROMPT" \
     $RESUME_FLAG \
     --permission-mode acceptEdits \
-    --effort max \
-    --max-turns 300 \
+    --effort "$EFFORT" \
+    --max-turns "$MAX_TURNS" \
     --output-format stream-json \
     --verbose \
     --include-partial-messages \
