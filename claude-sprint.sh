@@ -11,6 +11,11 @@ MAX_TURNS=300
 PROJECT_DIR_FLAG=""
 USE_TEAM=0
 POSITIONAL=()
+# Snapshot original args before the while loop consumes them via `shift`.
+# Needed so the self-detach re-exec into screen (below) passes the caller's
+# flags through — otherwise $@ is empty at exec time and the in-screen run
+# silently falls back to defaults (PASSES=1, MAX_TURNS=300).
+ORIGINAL_ARGS=("$@")
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --passes)
@@ -183,7 +188,7 @@ if [[ -z "${STY:-}" ]]; then
   echo "  Watch live:    screen -r $SCREEN_NAME"
   echo "  Tail log:      tail -f $LATEST_LOG_LINK"
   echo "  Check status:  cat $LATEST_STATUS_LINK"
-  exec screen -dmS "$SCREEN_NAME" "$0" "$@"
+  exec screen -dmS "$SCREEN_NAME" "$0" ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
 fi
 
 # Create this run's log/status files and point the "latest" symlinks at them.
