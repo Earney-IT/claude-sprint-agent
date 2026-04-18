@@ -32,7 +32,7 @@ claude -p $RESUME_FLAG \
   --include-partial-messages \
   --allowedTools \
     "Bash(git*)" "Bash(gh*)" \
-    "Bash(docker*)" "Bash(docker-compose*)" "Bash(docker compose*)" \
+    "Bash(docker compose*)" "Bash(docker-compose*)" \
     "Bash(npm*)" "Bash(npx*)" "Bash(node*)" "Bash(yarn*)" "Bash(pnpm*)" "Bash(bun*)" \
     "Bash(python*)" "Bash(python3*)" "Bash(pip*)" "Bash(pip3*)" "Bash(pipx*)" "Bash(poetry*)" "Bash(uv*)" "Bash(pytest*)" "Bash(venv*)" \
     "Bash(go*)" "Bash(cargo*)" "Bash(rustc*)" "Bash(ruby*)" "Bash(gem*)" "Bash(bundle*)" "Bash(php*)" "Bash(composer*)" "Bash(java*)" "Bash(javac*)" "Bash(mvn*)" "Bash(gradle*)" \

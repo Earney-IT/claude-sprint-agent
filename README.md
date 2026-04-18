@@ -155,7 +155,7 @@ This is intentional. It's a tripwire: if Claude tries something the allowlist do
 - `gh*` — GitHub CLI (PRs, workflow status, etc.).
 
 **Containers**
-- `docker*`, `docker-compose*`, `docker compose*` — build, up, down, restart, logs, exec, prune.
+- `docker compose*`, `docker-compose*` — full Compose lifecycle (build, up, down, restart, logs, exec, ps, pull, run). Bare `docker` subcommands (e.g. `docker system prune`, `docker stop <name>`, `docker rm`) are intentionally NOT allowed — every container operation must go through Compose, which scopes it to this project's stack.
 
 **Package managers & runtimes**
 - JS: `npm`, `npx`, `node`, `yarn`, `pnpm`, `bun`
@@ -202,7 +202,7 @@ This is intentional. It's a tripwire: if Claude tries something the allowlist do
 - **`dd`, `mkfs`, `fdisk`, `parted`** — no disk-level operations.
 - **`crontab`** — no silent scheduling.
 
-Docker can still clean up containers/images with `docker rm`, `docker system prune`, etc. — those live inside `docker*` and don't require the `rm` command.
+Note that bare `docker` subcommands (anything that isn't `docker compose ...`) are also blocked — Claude can only manage containers through Compose, which scopes operations to this project's stack and never touches workloads from other projects on the same host.
 
 ---
 
@@ -280,7 +280,7 @@ To run multiple sprints on different projects in parallel, make copies of the sc
 ## Safety notes
 
 - **`git*` is fully open.** Claude can force-push, rewrite history, delete branches. The assumption is that GitHub history + branch protection rules on important branches are your recovery safety net.
-- **Docker is fully open in the allowlist.** Technically Claude can stop containers, remove images, and prune volumes anywhere on the host. The sprint prompt mitigates this with explicit instructions to scope every Docker operation to this project's compose stack and to never run host-wide commands like `docker system prune`, `docker volume prune`, `docker image prune -a`, or `docker rm $(docker ps -aq)`. That's a soft guardrail (instructions, not a hard block) — if you've got high-value containers from other projects on the same host, treat this as a meaningful risk and consider running the sprint on a host that only serves this project.
+- **Docker is restricted to Compose.** Only `docker compose ...` (and legacy `docker-compose ...`) are on the allowlist — bare `docker` subcommands are blocked. This is a hard constraint, not just a prompt instruction: Claude cannot run `docker system prune`, `docker stop <name>`, `docker rm`, or anything else that would reach containers/images/volumes outside this project's Compose stack. If it tries, the sprint stalls waiting for an approval that never comes (which is the desired behavior). The full Compose lifecycle (build, up, down, restart, logs, exec, ps, pull, run) is unrestricted.
 - **Network is open.** `curl` and `wget` can hit any URL. Not a realistic risk for dev work, but worth knowing.
 - **No runtime supervision.** Unlike the remote-control version of this workflow, you cannot interrupt, redirect, or course-correct the sprint mid-run without SSH'ing in and killing the process. Make the prompt count.
 
