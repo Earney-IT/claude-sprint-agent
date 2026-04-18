@@ -248,7 +248,7 @@ Note that bare `docker` subcommands (anything that isn't `docker compose ...`) a
 
 The prompt the script sends to Claude:
 
-> Continue working through the remaining tasks in order. Use subagents aggressively via the Task/Agent tool — dispatch specialized agents (general-purpose, code-reviewer, codebase explorers, etc., including any project-specific agents defined in `.claude/agents/`) for independent work streams to parallelize progress, for focused codebase exploration, and for reviewing non-trivial changes before committing. When multiple pieces of work can happen concurrently with no shared state or sequential dependency, spawn the subagents in a single turn rather than doing it all sequentially on the main thread. Keep using subagents throughout the sprint, not just at the start. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use `docker compose` targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like `docker system prune`, `docker volume prune`, `docker image prune -a`, `docker rm $(docker ps -aq)`, or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When all tasks are done, respond with exactly `DONE` and stop.
+> Continue working through the remaining tasks in order. Agent teams are pre-enabled for you (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) — create a team of 3-5 specialized teammates (each one a full Claude Code instance with its own context window) whenever the remaining backlog has independent work streams that can genuinely run in parallel without stepping on each other: e.g. a backend implementer, a frontend implementer, a test writer, and a code reviewer. Assign each teammate a focused piece of work, let them coordinate via the shared task list and inter-agent messaging, and synthesize their output back before committing. Keep the team alive and keep assigning new work to it throughout the sprint — do not tear it down after a single round. After session resumption (the `--resume` flag), re-spawn the team if teammates have been lost, because in-process teammates do not currently persist across `/resume` in this experimental feature. For lighter-weight parallelization — focused codebase exploration, research questions, reviewing a specific change — use subagents via the Task/Agent tool (including any project-specific agents defined in `.claude/agents/`) rather than spinning up a full team. When multiple pieces of work can happen concurrently with no shared state or sequential dependency, spawn the agents in a single turn rather than doing it all sequentially on the main thread. Ignore any claude-sprint.sh file — that is the wrapper script running you, not part of the project work. Be aware that this host may run other Docker workloads outside this project: scope every Docker operation to this project's compose stack (use `docker compose` targeted at this project's compose file, or named containers/images/volumes that belong to this project). Never run host-wide destructive commands like `docker system prune`, `docker volume prune`, `docker image prune -a`, `docker rm $(docker ps -aq)`, or anything that would touch containers/images/networks/volumes belonging to other projects. After each major milestone: run tests, commit with a clear descriptive message, push to the remote branch, and rebuild/redeploy the Docker containers so the live platform reflects the progress. If tests fail, fix them before pushing. If a deploy fails, diagnose and retry. When all tasks are done, respond with exactly `DONE` and stop.
 
 If you want to change behavior, edit the prompt string in the script. Common tweaks:
 
@@ -259,24 +259,48 @@ If you want to change behavior, edit the prompt string in the script. Common twe
 
 ---
 
-## Subagents (agent teams)
+## Parallelization: agent teams and subagents
 
-Claude Code subagents are **enabled by default in headless mode** — there's no feature flag to set. The main agent can dispatch specialized sub-agents (general-purpose research, code-reviewer, codebase-explorer, etc.) to parallelize work and offload focused tasks. The sprint prompt explicitly instructs Claude to use them aggressively throughout the run.
+The sprint script gives Claude two separate mechanisms for parallel work, and the prompt tells it when to use which.
 
-**Where subagent definitions live** (first match wins):
-1. `.claude/agents/` in the project dir — project-specific agents
-2. `~/.claude/agents/` — your personal agents, available across projects
-3. Plugin agents from installed Claude Code plugins
+### Agent teams (experimental — enabled by the script)
 
-Drop markdown files defining agents (with frontmatter for `description`, `tools`, optional `model`) in either directory and the main sprint agent will see them and use them. No script change required. To see what agents are available, open Claude Code interactively and type `/agents`.
+[Agent teams](https://code.claude.com/docs/en/agent-teams) spin up multiple peer Claude Code instances that coordinate via a shared task list and can message each other directly. They're the right tool when the remaining backlog has independent work streams that benefit from genuine parallelism (backend + frontend + tests, or multi-perspective code review).
 
-**Subagent model (optional):**
-Set `CLAUDE_CODE_SUBAGENT_MODEL` in your environment if you want subagents on a different model than the main sprint (e.g. Sonnet for cheaper parallelism while Opus drives the main thread):
+Agent teams are **experimental and disabled by default in Claude Code**. The sprint script auto-enables them:
+
+```bash
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+```
+
+This is set before Claude launches, so the agent can create and manage teams without any extra config. Requires Claude Code v2.1.32+ (check with `claude --version`).
+
+**Known headless caveats** (all documented in the official docs):
+- **Teammates do not survive `/resume`**: after a session resumes (which is exactly what multi-pass mode does), any in-process teammates from the prior pass are gone. The prompt instructs Claude to re-spawn the team when this happens.
+- **In-process mode only**: split-pane mode needs tmux or iTerm2; we're in `screen`, so the default in-process mode is what you get. That's fine — teammates still coordinate via the shared task list and mailbox, Claude just can't display them in split panes.
+- **Token cost is higher**: every teammate is a separate Claude Code instance with its own context window. The sprint's `--usage N%` budget cap still applies — be aware that a 5-teammate team can burn budget ~5× faster than a solo session.
+
+### Subagents (always on)
+
+[Subagents](https://code.claude.com/docs/en/sub-agents) are lighter-weight: the main agent dispatches a specialized helper (via the Task/Agent tool), the helper does a focused job, and reports back. They work for things like "explore this codebase", "review this PR", or "run the tests and summarize". They're enabled by default in headless mode — no flag needed, the `Agent` tool does not need to be on the `--allowedTools` list.
+
+**Where agent definitions live** (both subagents and agent teammates can use these):
+1. `.claude/agents/` in the project dir — project-specific roles
+2. `~/.claude/agents/` — your personal agents, cross-project
+3. Plugin-provided agents from installed Claude Code plugins
+
+Drop markdown files with frontmatter (`description`, `tools`, optional `model`) and Claude will discover them. `/agents` in an interactive Claude Code session shows what's currently available.
+
+**Subagent / teammate model override (optional):**
+
+Want teammates and subagents on a cheaper model than the main sprint Opus thread? Set:
 
 ```bash
 export CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-4-6
 ~/claude-sprint.sh <session-id> --passes 10 --usage 100%
 ```
+
+Main sprint runs on Opus (`--effort max`), parallel work runs on Sonnet — a common optimization for multi-agent runs.
 
 ---
 
