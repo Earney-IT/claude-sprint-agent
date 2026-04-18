@@ -40,10 +40,12 @@ Built for the workflow: *work with Claude Code interactively, then hand off a sc
 
 ## Usage
 
+The script self-detaches into a `screen` session — you'll get your terminal back immediately and the sprint runs in the background.
+
 ### Option A — Fresh sprint (no prior session)
 
 ```bash
-screen -S claude-sprint ~/claude-sprint.sh
+~/claude-sprint.sh
 ```
 
 Claude starts clean. The prompt in the script tells it to work through tasks in order, run tests, commit, push, and redeploy after each milestone, then respond with `DONE` when finished.
@@ -59,20 +61,20 @@ claude --resume
 Pick the session you want and copy its ID. Then:
 
 ```bash
-screen -S claude-sprint ~/claude-sprint.sh <session-id>
+~/claude-sprint.sh <session-id>
 ```
 
 Claude picks up with full conversation history from that session.
 
-### Detaching
+### Watching it live (optional)
 
-Once the sprint is running, detach from screen with:
+The sprint runs detached in the background — you don't have to attach. But if you want to peek at it live:
 
+```bash
+screen -r claude-sprint
 ```
-Ctrl+a  then  d
-```
 
-The sprint keeps running in the background. You can close your terminal, log out, walk away.
+To detach again without killing it: `Ctrl+a` then `d`. To stop watching and let it keep running: just detach. To kill the sprint: `screen -X -S claude-sprint quit`.
 
 ---
 

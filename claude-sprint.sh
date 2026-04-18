@@ -9,6 +9,16 @@ LOG_FILE="$HOME/claude-sprint.log"
 STATUS_FILE="$HOME/claude-sprint.status"
 # --------------
 
+# Self-detach: if not already inside screen, re-exec inside a detached screen
+# session so the caller gets their terminal back immediately.
+if [[ -z "${STY:-}" ]]; then
+  echo "Starting Claude sprint in detached screen session: $SCREEN_NAME"
+  echo "  Watch live:    screen -r $SCREEN_NAME"
+  echo "  Tail log:      tail -f $LOG_FILE"
+  echo "  Check status:  cat $STATUS_FILE"
+  exec screen -dmS "$SCREEN_NAME" "$0" "$@"
+fi
+
 cd "$PROJECT_DIR" || { echo "Cannot cd to $PROJECT_DIR"; exit 1; }
 
 # Build --resume flag only if a session ID was provided
