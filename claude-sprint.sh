@@ -323,18 +323,11 @@ for (( pass=1; pass<=PASSES; pass++ )); do
     fi
   fi
 
-  # Stop immediately on error
-  if [[ $CLAUDE_EXIT -ne 0 ]]; then
-    echo "[$(date)] Pass $pass errored — stopping multi-pass run." | tee -a "$LOG_FILE"
-    OVERALL_STATUS="ERROR"
-    break
-  fi
-
-  # Detect terminal markers within this pass's output only.
-  # Only the main agent's final "type":"result" event counts — subagent and
-  # teammate outputs live inside assistant messages and never produce their
-  # own top-level result events, so this avoids false positives from nested
-  # reports echoing "DONE"/"NO TASKS".
+  # Pull this pass's output and main-agent result event up front. The result
+  # event is the only place we trust for DONE / NO TASKS / cost / terminal
+  # state — subagent and teammate outputs live inside assistant messages and
+  # never produce their own top-level result events, so scoping detection to
+  # this single line avoids false positives from nested reports.
   #
   # Parse with jq rather than brittle regex on the raw JSON line: the result
   # field can contain arbitrary preceding text (commentary, report summary)
@@ -345,6 +338,23 @@ for (( pass=1; pass<=PASSES; pass++ )); do
   RESULT_LINE=$(echo "$PASS_OUTPUT" | grep '"type":"result"' | tail -1)
   MAIN_RESULT_TEXT=$(echo "$RESULT_LINE" | jq -r '.result // empty' 2>/dev/null)
   LAST_LINE=$(echo "$MAIN_RESULT_TEXT" | awk 'NF' | tail -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  TERMINAL_REASON=$(echo "$RESULT_LINE" | jq -r '.terminal_reason // empty' 2>/dev/null)
+
+  # Stop on real errors, but treat max-turns exhaustion as INCOMPLETE (the
+  # documented contract — the next pass continues with a fresh turn budget).
+  if [[ $CLAUDE_EXIT -ne 0 ]]; then
+    if [[ "$TERMINAL_REASON" == "max_turns" ]]; then
+      echo "[$(date)] Pass $pass: hit --max-turns ($MAX_TURNS) — recording INCOMPLETE, continuing to next pass." | tee -a "$LOG_FILE"
+      # Fall through; the no-marker branch below sets OVERALL_STATUS=INCOMPLETE
+      # without breaking the loop.
+    else
+      REASON_DISPLAY="${TERMINAL_REASON:-unknown}"
+      echo "[$(date)] Pass $pass errored (exit $CLAUDE_EXIT, terminal_reason=$REASON_DISPLAY) — stopping multi-pass run." | tee -a "$LOG_FILE"
+      OVERALL_STATUS="ERROR"
+      break
+    fi
+  fi
+
   PASS_NO_TASKS=0
   PASS_DONE=0
   if [[ "$LAST_LINE" == "NO TASKS" ]]; then
